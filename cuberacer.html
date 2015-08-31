@@ -1,0 +1,508 @@
+<html> <head> <title>My first Three.js app</title> <style> body { margin: 0; } canvas { width: 100%; height: 100% } </style> </head> <body> <script src="js/three.min.js"></script> 
+    <script> // Our Javascript will go here. 
+//=========================================================================
+// MATH
+//=========================================================================
+
+function limit(value, min, max)     { return Math.max(min, Math.min(value, max)) }
+function randomInt(min, max)        { return Math.round(interpolate(min, max, Math.random())) }
+function randomChoice(options)      { return options[randomInt(0, options.length-1)] }
+function percentRemaining(n, total) { return (n%total)/total }
+function accelerate(v, accel, dt)   { return v + (accel * dt) }
+function interpolate(a,b,percent)   { return a + (b-a)*percent }
+function easeIn(a,b,percent)        { return a + (b-a)*Math.pow(percent,2) }
+function easeOut(a,b,percent)       { return a + (b-a)*(1-Math.pow(1-percent,2)) }
+function easeInOut(a,b,percent)     { return a + (b-a)*((-Math.cos(percent*Math.PI)/2) + 0.5) }
+  
+function increase(start, increment, max) {
+    var result = start + increment;
+    while (result >= max) result -= max;
+    while (result < 0)    result += max;
+    return result;
+}
+
+function project(p, cameraX, cameraY, cameraZ) {
+    p.camera.x     = (p.world.x || 0) - cameraX;
+    p.camera.y     = (p.world.y || 0) - cameraY;
+    p.camera.z     = (p.world.z || 0) - cameraZ;
+    p.screen.scale = cameraDepth/p.camera.z;
+    p.screen.x     = Math.round((width/2)  + (p.screen.scale * p.camera.x  * width/2));
+    p.screen.y     = Math.round((height/2) - (p.screen.scale * p.camera.y  * height/2));
+    p.screen.w     = Math.round(             (p.screen.scale * roadWidth   * width/2));
+}
+
+function overlap(x1, w1, x2, w2, percent) {
+    var half = (percent || 1)/2;
+    var min1 = x1 - (w1*half);
+    var max1 = x1 + (w1*half);
+    var min2 = x2 - (w2*half);
+    var max2 = x2 + (w2*half);
+    return ! ((max1 < min2) || (min1 > max2));
+}
+//----------------------------------------        
+// ROAD
+//----------------------------------------
+
+segments = [];
+function addSegment(curve, y) {
+    segments.push({
+          index: segments.length,
+          curve: curve,
+              y: y,
+    });
+}
+
+function addRoad(enter, hold, leave, curve, y) {
+    var startY   = lastY();
+    var endY     = startY + (y);
+    var n, total = enter + hold + leave;
+    
+    for(n = 0 ; n < enter ; n++) addSegment(easeIn(0, curve, n/enter), easeInOut(startY, endY, n/total));
+    for(n = 0 ; n < hold  ; n++) addSegment(curve, easeInOut(startY, endY, (enter+n)/total));
+    for(n = 0 ; n < leave ; n++) addSegment(easeInOut(curve, 0, n/leave), easeInOut(startY, endY, (enter+hold+n)/total));
+}
+        
+function lastY() { return (segments.length == 0) ? 0 : segments[segments.length-1].y; }
+
+var ROAD = {
+    LENGTH: { NONE: 0, SHORT:  25, MEDIUM:   50, LONG:  100 },
+    HILL:   { NONE: 0, LOW:    20, MEDIUM:   40, HIGH:   60 },
+    CURVE:  { NONE: 0, EASY:    20, MEDIUM:    40, HARD:    60 }
+};
+
+function addStraight(num) {
+    num = num || ROAD.LENGTH.MEDIUM;
+    addRoad(num, num, num, 0, 0);
+}
+
+function addHill(num, height) {
+    num    = num    || ROAD.LENGTH.MEDIUM;
+    height = height || ROAD.HILL.MEDIUM;
+    addRoad(num, num, num, 0, height);
+}
+
+function addCurve(num, curve, height) {
+    num    = num    || ROAD.LENGTH.MEDIUM;
+    curve  = curve  || ROAD.CURVE.MEDIUM;
+    height = height || ROAD.HILL.NONE;
+    addRoad(num, num, num, curve, height);
+}
+
+function addLowRollingHills(num, height) {
+    num    = num    || ROAD.LENGTH.SHORT;
+    height = height || ROAD.HILL.LOW;
+    addRoad(num, num, num,  ROAD.CURVE.EASY,                height/2);
+    addRoad(num, num, num,  0,               -height);
+    addRoad(num, num, num,  ROAD.CURVE.EASY,  height);
+    addRoad(num, num, num,  0,                0);
+    addRoad(num, num, num, -ROAD.CURVE.EASY,  height/2);
+    addRoad(num, num, num,  0,                0);
+}
+
+function addSCurves() {
+    addRoad(ROAD.LENGTH.MEDIUM, ROAD.LENGTH.MEDIUM, ROAD.LENGTH.MEDIUM,  ROAD.CURVE.EASY,  ROAD.HILL.LOW);
+    addRoad(ROAD.LENGTH.MEDIUM, ROAD.LENGTH.MEDIUM, ROAD.LENGTH.MEDIUM,  -ROAD.CURVE.EASY, -ROAD.HILL.LOW);
+    addRoad(ROAD.LENGTH.MEDIUM, ROAD.LENGTH.MEDIUM, ROAD.LENGTH.MEDIUM, ROAD.CURVE.EASY,  ROAD.HILL.MEDIUM);
+    addRoad(ROAD.LENGTH.MEDIUM, ROAD.LENGTH.MEDIUM, ROAD.LENGTH.MEDIUM, -ROAD.CURVE.MEDIUM, -ROAD.HILL.MEDIUM);
+        addRoad(ROAD.LENGTH.MEDIUM, ROAD.LENGTH.MEDIUM, ROAD.LENGTH.MEDIUM, ROAD.CURVE.EASY, ROAD.HILL.LOW);
+}
+
+function addBumps() {
+    addRoad(10, 10, 10, 0,  5);
+    addRoad(10, 10, 10, 0, -2);
+    addRoad(10, 10, 10, 0, -5);
+    addRoad(10, 10, 10, 0,  8);
+    addRoad(10, 10, 10, 0,  5);
+    addRoad(10, 10, 10, 0, -7);
+    addRoad(10, 10, 10, 0,  5);
+    addRoad(10, 10, 10, 0, -2);
+}
+
+function addDownhillToEnd(num) {
+    num = num || 200;
+    addRoad(num, num, num, -ROAD.CURVE.EASY, -lastY());
+}
+      
+//-------------------------------------------------------------------------
+
+function resetRoad() {
+    segments = [];
+
+    addStraight(ROAD.LENGTH.SHORT);
+    addSCurves();
+    addLowRollingHills();
+    addSCurves();
+    addCurve(ROAD.LENGTH.MEDIUM, ROAD.CURVE.MEDIUM, ROAD.HILL.LOW);
+    addBumps();
+    addLowRollingHills();
+    addCurve(ROAD.LENGTH.LONG*2, ROAD.CURVE.MEDIUM, ROAD.HILL.MEDIUM);
+    addStraight();
+    addHill(ROAD.LENGTH.MEDIUM, ROAD.HILL.HIGH);
+    addSCurves();
+    addCurve(ROAD.LENGTH.LONG, -ROAD.CURVE.MEDIUM, ROAD.HILL.NONE);
+    addHill(ROAD.LENGTH.LONG, ROAD.HILL.HIGH);
+    addCurve(ROAD.LENGTH.LONG, ROAD.CURVE.MEDIUM, -ROAD.HILL.LOW);
+    addBumps();
+    addHill(ROAD.LENGTH.LONG, ROAD.HILL.MEDIUM);
+    addStraight();
+    addSCurves();
+    addDownhillToEnd();
+
+    trackLength = segments.length;
+}
+
+        
+        
+//----------------------------
+//
+//----------------------------
+        
+var cameraDistance = 10;
+var cameraHeight = 6;
+        
+var scene = new THREE.Scene(); 
+var camera = new THREE.PerspectiveCamera( 75, window.innerWidth / window.innerHeight, 0.1, 1000 ); 
+var renderer = new THREE.WebGLRenderer({ alpha: true }); 
+renderer.setSize( window.innerWidth, window.innerHeight );
+renderer.setClearColor( 0x7ec0ee, 1 );    
+document.body.appendChild( renderer.domElement );    
+    
+var light = new THREE.HemisphereLight(0xffffff, 0x555555, 1);
+//var light = new THREE.DirectionalLight( 0xffffff, 1 );
+light.position.x -= 1000;
+light.position.z += 100;
+
+scene.add( light );
+        
+var carAccel = 0.2;
+var carBreak = 0.1;
+var carDecel = 0.01;
+var carSpeed = 0;
+var carMaxSpeed = 0.5;        
+        
+var carWidth = 1;
+var carHeight = carWidth/3;
+var carDepth = carWidth*2;
+        
+var baseGeometry = new THREE.BoxGeometry( carWidth, carHeight, carDepth ); 
+var baseMaterial = new THREE.MeshLambertMaterial( { color: 0xcc0000 } ); 
+var headGeometry = new THREE.BoxGeometry( carWidth*0.7, carHeight*0.7, carDepth*0.6 ); 
+var headMaterial = new THREE.MeshLambertMaterial( { color: 0xddeded } ); 
+var wheelGeometry = new THREE.CylinderGeometry( carHeight/2, carHeight/2, carHeight/2 );
+var wheelMaterial = new THREE.MeshLambertMaterial( {color: 0x221111} );
+var base = new THREE.Mesh(baseGeometry, baseMaterial);
+var head = new THREE.Mesh(headGeometry, headMaterial);
+var FLwheel = new THREE.Mesh( wheelGeometry, wheelMaterial );
+var FRwheel = new THREE.Mesh( wheelGeometry, wheelMaterial );
+var RLwheel = new THREE.Mesh( wheelGeometry, wheelMaterial );
+var RRwheel = new THREE.Mesh( wheelGeometry, wheelMaterial );
+
+head.position.y += carHeight;
+
+FLwheel.position.z -= carDepth/2*0.75;
+FLwheel.position.y -= carHeight/2;
+FLwheel.position.x -= carWidth/2;
+FLwheel.rotation.z -= Math.PI/2;
+
+FRwheel.position.z -= carDepth/2*0.75;
+FRwheel.position.y -= carHeight/2;
+FRwheel.position.x += carWidth/2;
+FRwheel.rotation.z -= Math.PI/2;
+
+RLwheel.position.z += carDepth/2*0.75;
+RLwheel.position.y -= carHeight/2;
+RLwheel.position.x -= carWidth/2;
+RLwheel.rotation.z -= Math.PI/2;
+
+RRwheel.position.z += carDepth/2*0.75;
+RRwheel.position.y -= carHeight/2;
+RRwheel.position.x += carWidth/2;
+RRwheel.rotation.z -= Math.PI/2;
+
+var car = new THREE.Object3D();
+car.add(base);
+car.add(head);
+car.add(FLwheel);
+car.add(FRwheel);
+car.add(RLwheel);
+car.add(RRwheel);
+
+car.position.y += 5;
+car.position.z -= 6;
+scene.add(car);
+        
+//loader = new THREE.JSONLoader();
+//var car = new THREE.Object3D();
+//loader.load('car.js', function (geometry, materials) {
+//  var material = new THREE.MeshLambertMaterial({
+//    map: THREE.ImageUtils.loadTexture('textures/gtare.jpg'),   
+//    colorAmbient: [0.480000026226044, 0.480000026226044, 0.480000026226044],
+//    colorDiffuse: [0.480000026226044, 0.480000026226044, 0.480000026226044],
+//    colorSpecular: [0.8999999761581421, 0.8999999761581421, 0.8999999761581421]
+//  });
+//
+//  carModel = new THREE.Mesh(
+//    geometry,
+//    material
+//  );
+//
+//  carModel.receiveShadow = true;
+//  carModel.castShadow = true;
+// 
+//  carModel.rotation.y = -Math.PI;
+//  car.add(carModel);
+//    
+//  var carScale = 0.04;
+//  car.scale.set(carScale,carScale,carScale);
+//  //scene.add(car);
+//});
+        
+        
+//directionalLight.target = car;
+        
+resetRoad();
+
+var tileDepth = 2;
+var tileHeight = 0.5;
+var tileRoadWidth = 10;
+var tileRumbleWidth = 1;
+var tileRoadGeometry = new THREE.BoxGeometry(tileRoadWidth, tileDepth, tileHeight);
+var tileRumbleGeometry = new THREE.BoxGeometry(tileRumbleWidth, tileDepth, tileHeight);        
+var tileRoadMaterial = new THREE.MeshLambertMaterial({ color: 0x6B6B6B, ambient: 0x6B6B6B });
+var tileRoadMaterial2 = new THREE.MeshLambertMaterial({ color: 0x696969, ambient: 0x696969 });
+var tileRumbleMaterial = new THREE.MeshLambertMaterial({ color: 0xCC0000, ambient: 0x6B6B6B });
+var tileRumbleMaterial2 = new THREE.MeshLambertMaterial({ color: 0xFFFFFF, ambient: 0x696969 });
+
+var nTiles = 500;        
+var prevTile = new THREE.Object3D();
+prevTile.rotation.x = -Math.PI/2;
+prevTile.position.y=1;
+
+var prevprevTile = new THREE.Object3D();
+prevprevTile.rotation.x = -Math.PI/2;
+prevprevTile.position.y=1;
+
+var currentNTiles = 0;
+var startNTile = 0;
+
+var functionTypes = [easeIn, easeOut, easeInOut ];
+
+var currentCurveType, curveRadius, currentElevationType, elevation;
+
+while(currentNTiles < nTiles){
+    var n;
+    for(n=startNTile; n<currentNTiles; n++){
+        var positionY = prevTile.position.y + currentElevationType(0,elevation,n/currentNTiles);
+        if(positionY < 1) positionY = 1;
+        if(n%2) positionY +=0.01;
+
+        var rotationX = -Math.PI/2-Math.abs(prevprevTile.position.y-positionY)/tileDepth;
+        var rotationZ = prevTile.rotation.z + currentCurveType(0, curveRadius, n/currentNTiles);
+        var positionX = prevTile.position.x - Math.sin(rotationZ)*tileDepth;
+        var positionZ = prevTile.position.z - Math.cos(rotationZ)*tileDepth;
+        
+        var tile = new THREE.Mesh(tileRoadGeometry, (n%2) ? tileRoadMaterial : tileRoadMaterial2);
+        
+        tile.position.y = positionY ;
+        
+                              
+        prevTile.rotation.x = rotationX;
+
+        tile.rotation.z = rotationZ;
+        tile.rotation.y = 0; //Math.random()*Math.PI;
+        tile.position.x = positionX;
+        tile.position.z = positionZ;
+        
+        scene.add(tile);
+        console.log(tile.rotation.y);
+        
+        var tile2=new THREE.Mesh(tileRumbleGeometry,(n%2)?tileRumbleMaterial:tileRumbleMaterial2);
+        tile2.position.y = positionY + 0.1;
+        tile2.rotation.x = rotationX;
+        tile2.rotation.z += rotationZ;
+        tile2.position.x = positionX + Math.cos(rotationZ)*tileRoadWidth/2;
+        
+        tile2.position.z = positionZ + Math.sin(rotationZ)*tileRoadWidth/2;
+        
+        scene.add(tile2);
+        
+        var tile3=new THREE.Mesh(tileRumbleGeometry,(n%2)?tileRumbleMaterial:tileRumbleMaterial2);
+        tile3.position.y = positionY + 0.1;
+        tile3.rotation.x = rotationX;
+        tile3.rotation.z += rotationZ;
+        tile3.position.x = positionX - Math.cos(rotationZ)*tileRoadWidth/2;
+        
+        tile3.position.z = positionZ - Math.sin(rotationZ)*tileRoadWidth/2;
+        
+        scene.add(tile3);
+
+        prevprevTile=prevTile;
+        prevTile = tile;
+    }
+    currentNTiles -= currentNTiles - n; 
+    startNTile = n;
+    currentNTiles += Math.random()*nTiles*0.1;
+    //if(currentNTiles < nTiles) currentNTiles = nTiles;
+    
+    currentCurveType = randomChoice(functionTypes);
+    curveRadius = (Math.random()-0.5)*0.1;
+    
+    currentElevationType = randomChoice(functionTypes);   
+    elevation = (Math.random()-0.5);
+
+}
+var ground = new THREE.Mesh( 
+    new THREE.PlaneBufferGeometry( 100000, 100000 ),
+    new THREE.MeshBasicMaterial({ color:  0x10AA10, ambient: 0x333333 })
+  );
+ground.rotation.x = -Math.PI/2;
+scene.add(ground);
+        
+//=========================================================================
+// UPDATE
+//=========================================================================
+
+function update(){
+    var direction = new THREE.Vector3(0, -1, 0);
+    direction.normalize();
+    //var carFLPoint = new THREE.Vector3(FLwheel.position.x, FLwheel.position.y, FLwheel.position.z);
+    //var carFRPoint = new THREE.Vector3(FRwheel.position.x, FRwheel.position.y, FRwheel.position.z);
+    //var carRLPoint = new THREE.Vector3(RLwheel.position.x, RLwheel.position.y, RLwheel.position.z);
+    //var carRRPoint = new THREE.Vector3(RRwheel.position.x, RRwheel.position.y, RRwheel.position.z);   
+    var carPoint = new THREE.Vector3(car.position.x, car.position.y, car.position.z);
+    var carPoint2 = new THREE.Vector3(car.position.x+carWidth/4, car.position.y, car.position.z);
+    var carPoint3 = new THREE.Vector3(car.position.x, car.position.y, car.position.z+carDepth/4);
+    
+    //var points = [carFLPoint,carFRPoint,carRLPoint,carRRPoint,carPoint,carPoint2,carPoint3];
+    var points = [carPoint,carPoint2,carPoint3];
+    
+    var maxy=-10000;
+    for(var i=0;i<points.length;i++){
+        var ray = new THREE.Raycaster(points[i], direction); 
+        var rayIntersects = ray.intersectObjects(scene.children, true);    
+    
+        if (rayIntersects[0]){
+            if(rayIntersects[0].point.y > maxy){
+                maxy = rayIntersects[0].point.y;
+            }
+        }
+    }
+    
+    if(maxy>0) car.position.y = maxy + carHeight*5;
+    else car.position.y -= 0.5;
+        
+    if(keyLeft){
+        if(carSpeed<0)
+            car.rotation.y -= 0.02;
+        else
+            car.rotation.y += 0.01;
+    }
+    else if(keyRight){
+        if(carSpeed<0)
+            car.rotation.y += 0.02;
+        else
+            car.rotation.y -= 0.01;
+    }
+    
+    if(keyFaster){
+        carSpeed += carAccel;
+    }
+    else if(keySlower){
+        carSpeed -= carBreak;
+    }else if(carSpeed > 0) {
+        carSpeed -= carDecel;
+        if(carSpeed<0)
+            carSpeed=0
+    }else if(carSpeed < 0) {
+        carSpeed += carDecel;
+        if(carSpeed>0)
+            carSpeed=0
+    }
+
+    carSpeed = limit(carSpeed, -carMaxSpeed/2, carMaxSpeed);
+    
+    if(keyUp){
+        car.position.y += 1;
+        car.rotation.x -= 0.001;
+    }
+    if(keyDown){
+        car.position.y -= 1;
+        car.rotation.x += 0.001;
+    }
+    
+    if(car.position.y<0) car.position.y=0;
+    
+    car.position.z -= Math.cos(car.rotation.y)*carSpeed;
+    car.position.x -= Math.sin(car.rotation.y)*carSpeed;
+    
+    camera.position.x = car.position.x;
+    camera.position.y = car.position.y + cameraHeight;
+    camera.position.z = car.position.z;
+    camera.position.z += Math.cos(car.rotation.y)*cameraDistance;
+    camera.position.x += Math.sin(car.rotation.y)*cameraDistance;
+
+    camera.lookAt(car.position);
+}
+ 
+//=========================================================================
+// KEY LISTENERS
+//=========================================================================
+var keyLeft        = false;                                  // keyPressed indicators
+var keyRight       = false;
+var keyFaster      = false;
+var keySlower      = false;        
+var keyUp          = false;
+var keyDown        = false;
+        
+function addEventListeners() {
+    var KEY = { LEFT: 37, UP: 38, RIGHT: 39, DOWN: 40, A: 65, D: 68, S: 83, W: 87, Q: 81, E: 69 };
+    var keys = [
+        { keys: [KEY.LEFT,  KEY.A], mode: 'down', action: function() { keyLeft   = true;  } },
+        { keys: [KEY.RIGHT, KEY.D], mode: 'down', action: function() { keyRight  = true;  } },
+        { keys: [KEY.UP,    KEY.W], mode: 'down', action: function() { keyFaster = true;  } },
+        { keys: [KEY.DOWN,  KEY.S], mode: 'down', action: function() { keySlower = true;  } },
+        { keys: [KEY.Q],            mode: 'down', action: function() { keyUp     = true; } },
+        { keys: [KEY.E],            mode: 'down', action: function() { keyDown   = true; } },
+        { keys: [KEY.LEFT,  KEY.A], mode: 'up',   action: function() { keyLeft   = false; } },
+        { keys: [KEY.RIGHT, KEY.D], mode: 'up',   action: function() { keyRight  = false; } },
+        { keys: [KEY.UP,    KEY.W], mode: 'up',   action: function() { keyFaster = false; } },
+        { keys: [KEY.DOWN,  KEY.S], mode: 'up',   action: function() { keySlower = false; } },
+        { keys: [KEY.Q],            mode: 'up',   action: function() { keyUp     = false; } },
+        { keys: [KEY.E],            mode: 'up',   action: function() { keyDown   = false; } }
+
+    ];
+
+    var onkey = function(keyCode, mode) {
+        //alert(keyCode);
+        var n, k;
+        for(n = 0 ; n < keys.length ; n++) {
+            k = keys[n];
+            k.mode = k.mode || 'up';
+            if((k.key == keyCode || (k.keys && (k.keys.indexOf(keyCode) >= 0))) && k.mode == mode) k.action.call();
+        }
+    };
+
+    document.addEventListener('keydown',function(ev) { onkey(ev.keyCode, 'down'); });
+    document.addEventListener('keyup',function(ev) { onkey(ev.keyCode, 'up'); });
+}
+        
+        
+//=========================================================================
+// THE MAIN GAME LOOP
+//=========================================================================
+
+addEventListeners();
+
+function render() { 
+    requestAnimationFrame( render ); 
+    //console.log(camera.position.z + "  -   " + camera.position.y + "    -   " + camera.rotation.x);
+    //console.log(car.size);
+    update();
+    renderer.render( scene, camera ); 
+} 
+
+render();    
+    
+    </script> 
+    
+</body> </html>
